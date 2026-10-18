@@ -1,0 +1,24 @@
+{
+  "png_dimensiones": [
+    3507,
+    4960
+  ],
+  "pdf_A3": {
+    "paginas": 1,
+    "puntos": [
+      841.8897637795,
+      1190.5511811024
+    ]
+  },
+  "pdf_11x17": {
+    "paginas": 1,
+    "puntos": [
+      792.0,
+      1224.0
+    ]
+  },
+  "explicacion_paginas": 9,
+  "formato_documento": "PDF en la raíz con dos enlaces superiores e infografía en una página A3 completa.",
+  "datos_y_metricas": "Verificados",
+  "inspeccion_visual": "Requiere revisión de las imágenes renderizadas además de estas comprobaciones automáticas."
+}

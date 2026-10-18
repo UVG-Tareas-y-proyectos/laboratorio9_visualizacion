@@ -1,67 +1,141 @@
-"""Produce el PDF de explicación y su fuente Markdown editable con historial."""
+"""Genera el informe académico final en PDF en la raíz del repositorio.
+
+Uso: python src/documento.py
+La exportación a PDF utiliza Word en Windows o LibreOffice cuando esté disponible.
+"""
 from pathlib import Path
 import json
-import html
+import os
+import shutil
+import subprocess
+
 import pandas as pd
-from reportlab.pdfgen.canvas import Canvas
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from matplotlib.font_manager import findfont, FontProperties
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches, Pt, RGBColor, Mm
+from docx.opc.constants import RELATIONSHIP_TYPE
+from pypdf import PdfReader, PdfWriter
 
 ROOT=Path(__file__).resolve().parents[1]
 URL='https://github.com/UVG-Tareas-y-proyectos/laboratorio9_visualizacion'
 
 
+def exportar_pdf(docx_path):
+    if os.name=='nt':
+        subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',
+                        str(ROOT/'src/exportar_pdf.ps1'),'-InputPath',str(docx_path)],check=True)
+    else:
+        soffice=shutil.which('soffice') or shutil.which('libreoffice')
+        if not soffice:
+            raise RuntimeError('El DOCX se guardó. Para exportar PDF se necesita Word en Windows o LibreOffice.')
+        subprocess.run([soffice,'--headless','--convert-to','pdf','--outdir',str(docx_path.parent),str(docx_path)],check=True)
+
+
 def main():
-    for name,weight in [('DV','normal'),('DV-Bold','bold')]:
-        pdfmetrics.registerFont(TTFont(name,findfont(FontProperties(family='DejaVu Sans',weight=weight))))
-    pdfmetrics.registerFontFamily('DV',normal='DV',bold='DV-Bold',italic='DV',boldItalic='DV-Bold')
-    styles=getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='Body',fontName='DV',fontSize=9.6,leading=13,spaceAfter=6,textColor=colors.black))
-    styles.add(ParagraphStyle(name='SmallDV',fontName='DV',fontSize=8.1,leading=11,spaceAfter=6))
-    styles.add(ParagraphStyle(name='TitleDV',fontName='DV-Bold',fontSize=22,leading=27,spaceAfter=15,textColor=colors.black))
-    styles.add(ParagraphStyle(name='H1DV',fontName='DV-Bold',fontSize=15,leading=19,spaceBefore=9,spaceAfter=10,keepWithNext=True,textColor=colors.black))
-    styles.add(ParagraphStyle(name='H2DV',fontName='DV-Bold',fontSize=11.5,leading=15,spaceBefore=8,spaceAfter=6,keepWithNext=True,textColor=colors.black))
-    styles.add(ParagraphStyle(name='CellDV',fontName='DV',fontSize=8.2,leading=10.4))
-    styles.add(ParagraphStyle(name='HeadDV',fontName='DV-Bold',fontSize=8.2,leading=10.4,textColor=colors.white))
-    story=[];md=[]
+    doc=Document()
+    section=doc.sections[0]
+    section.page_width=Mm(210);section.page_height=Mm(297)
+    section.top_margin=section.bottom_margin=section.left_margin=section.right_margin=Inches(1)
+    cover=[('UNIVERSIDAD DEL VALLE DE GUATEMALA',12,True,5,1.0),
+           ('DATA SCIENCE - 10',12,False,5,1.0),
+           ('Ing. Erick Marroquin',12,False,34,1.0),
+           ('',12,False,60,1.0),
+           ('Laboratorio 9. Visualización estática',15,True,85,1.5),
+           ('Ihan Marroquin - 23108\nDiego Patzan - 23525\n\n',12,False,82,1.5),
+           ('GUATEMALA, 18 de octubre del 2026',12,True,0,1.0)]
+    for i,(text,size,bold,after,line) in enumerate(cover):
+        par=doc.add_paragraph();par.alignment=WD_ALIGN_PARAGRAPH.CENTER
+        par.paragraph_format.space_after=Pt(after);par.paragraph_format.line_spacing=line
+        run=par.add_run(text);run.font.name='Times New Roman';run.font.size=Pt(size);run.bold=bold
+        if i==1:run.italic=True
+        if i==3:run.add_picture(str(ROOT/'src/recursos/logo_uvg.png'),width=Inches(2.09375))
+    named_styles={s.name:s for s in doc.styles}
+    for name,size,bold in [('Normal',12,False),('Heading 1',14,True),('Heading 2',12,True),('Caption',9.5,False)]:
+        style=named_styles.get(name)
+        if style is None and name=='Normal':style=named_styles.get('normal')
+        if style is None:style=doc.styles.add_style(name,1)
+        style.font.name='Times New Roman';style.font.size=Pt(size);style.font.bold=bold
+        style.font.color.rgb=RGBColor(0,0,0)
+    normal=named_styles.get('Normal')
+    if normal is None:normal=named_styles['normal']
+    normal.paragraph_format.line_spacing=1.07
+    normal.paragraph_format.space_after=Pt(6)
+    normal.paragraph_format.widow_control=True
+    doc.add_page_break()
     def p(s,small=False):
-        story.append(Paragraph(html.escape(s).replace('\n','<br/>'),styles['SmallDV' if small else 'Body']));md.append(s+'\n')
+        par=doc.add_paragraph(style=normal)
+        par.alignment=(WD_ALIGN_PARAGRAPH.CENTER if small else
+                       WD_ALIGN_PARAGRAPH.LEFT if '\n' in s else WD_ALIGN_PARAGRAPH.JUSTIFY)
+        run=par.add_run(s);run.font.name='Times New Roman';run.font.size=Pt(9.5 if small else 12)
+        par.paragraph_format.line_spacing=1.0 if small else 1.07
+        par.paragraph_format.space_after=Pt(6)
+        return par
     def h(s,level=1):
-        story.append(Paragraph(html.escape(s),styles['H1DV' if level==1 else 'H2DV']));md.append('#'*(level+1)+' '+s+'\n')
+        par=doc.add_paragraph(s,style=f'Heading {level}')
+        for run in par.runs:
+            run.font.name='Times New Roman';run.font.size=Pt(14 if level==1 else 12)
+            run.font.bold=True;run.font.color.rgb=RGBColor(0,0,0)
+        par.alignment=WD_ALIGN_PARAGRAPH.LEFT
+        par.paragraph_format.space_before=Pt(12 if level==1 else 8)
+        par.paragraph_format.space_after=Pt(6)
+        par.paragraph_format.keep_with_next=True
+        par.paragraph_format.keep_together=True
+        par.paragraph_format.line_spacing=1.0
     def table(headers,rows,widths):
-        arr=[[Paragraph(html.escape(str(v)),styles['HeadDV']) for v in headers]]
-        arr += [[Paragraph(html.escape(str(v)),styles['CellDV']) for v in r] for r in rows]
-        t=Table(arr,colWidths=widths,repeatRows=1,hAlign='LEFT')
-        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#263C4A')),
-            ('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F1F4F5')]),
-            ('GRID',(0,0),(-1,-1),.45,colors.HexColor('#D9D9D9')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-            ('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),
-            ('TOPPADDING',(0,0),(-1,-1),4.5),('BOTTOMPADDING',(0,0),(-1,-1),4.5)]))
-        story.extend([t,Spacer(1,10)])
-        md.append('| '+' | '.join(headers)+' |\n| '+' | '.join(['---']*len(headers))+' |')
-        md.extend('| '+' | '.join(str(v) for v in r)+' |' for r in rows);md.append('')
+        t=doc.add_table(rows=1,cols=len(headers));t.autofit=False
+        usable=doc.sections[0].page_width-doc.sections[0].left_margin-doc.sections[0].right_margin
+        scaled=[int(usable*v/sum(widths)) for v in widths]
+        for col,width in zip(t.columns,scaled):col.width=width
+        border=OxmlElement('w:tblBorders')
+        for edge in ['top','left','bottom','right','insideH','insideV']:
+            el=OxmlElement('w:'+edge);el.set(qn('w:val'),'single');el.set(qn('w:sz'),'4');el.set(qn('w:color'),'B7B7B7');border.append(el)
+        t._tbl.tblPr.append(border)
+        repeat=OxmlElement('w:tblHeader');repeat.set(qn('w:val'),'true');t.rows[0]._tr.get_or_add_trPr().append(repeat)
+        for i,values in enumerate([headers,*rows]):
+            row=t.rows[0] if i==0 else t.add_row()
+            cant=OxmlElement('w:cantSplit');row._tr.get_or_add_trPr().append(cant)
+            for j,(cell,value) in enumerate(zip(row.cells,values)):
+                cell.width=scaled[j];cell.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                cp=cell._tc.get_or_add_tcPr();margins=OxmlElement('w:tcMar')
+                for edge,val in [('top','60'),('bottom','60'),('left','90'),('right','90')]:
+                    el=OxmlElement('w:'+edge);el.set(qn('w:w'),val);el.set(qn('w:type'),'dxa');margins.append(el)
+                cp.append(margins)
+                if i==0:
+                    shade=OxmlElement('w:shd');shade.set(qn('w:fill'),'E7E6E6');cp.append(shade)
+                par=cell.paragraphs[0];par.alignment=WD_ALIGN_PARAGRAPH.LEFT
+                par.paragraph_format.space_before=Pt(0);par.paragraph_format.space_after=Pt(0)
+                par.paragraph_format.line_spacing=1.0
+                run=par.add_run(str(value));run.font.name='Times New Roman';run.font.size=Pt(10.5);run.bold=i==0
+        doc.add_paragraph().paragraph_format.space_after=Pt(0)
     def image(name,caption,width=505):
-        from PIL import Image as PILImage
-        path=ROOT/'results/figures'/f'{name}.png'
-        with PILImage.open(path) as im:w,ht=im.size
-        story.append(Image(str(path),width=width,height=width*ht/w))
+        par=doc.add_paragraph();par.alignment=WD_ALIGN_PARAGRAPH.CENTER
+        par.paragraph_format.space_after=Pt(2);par.paragraph_format.keep_with_next=True
+        par.add_run().add_picture(str(ROOT/'results/figures'/f'{name}.png'),width=Inches(6.1))
         p(caption,True)
-        md.append(f'![{caption}](../results/figures/{name}.png)\n')
-    def page():story.append(PageBreak());md.append('\n---\n')
+    def page():
+        # Flujo continuo para evitar páginas casi vacías al usar letra de 12 puntos.
+        pass
+    def hyperlink(label,target):
+        par=doc.add_paragraph();par.paragraph_format.space_after=Pt(0);par.paragraph_format.line_spacing=1.0
+        rel=doc.part.relate_to(target,RELATIONSHIP_TYPE.HYPERLINK,is_external=True)
+        link=OxmlElement('w:hyperlink');link.set(qn('r:id'),rel)
+        run=OxmlElement('w:r');pr=OxmlElement('w:rPr')
+        font=OxmlElement('w:rFonts');font.set(qn('w:ascii'),'Times New Roman');font.set(qn('w:hAnsi'),'Times New Roman');pr.append(font)
+        size=OxmlElement('w:sz');size.set(qn('w:val'),'21');pr.append(size)
+        color=OxmlElement('w:color');color.set(qn('w:val'),'0000FF');pr.append(color)
+        run.append(pr);text=OxmlElement('w:t');text.text=label;run.append(text);link.append(run);par._p.append(link)
     tb=ROOT/'results/tables';a=json.loads((tb/'auditoria.json').read_text(encoding='utf-8'))
     k=a['kpis'];v=a['validacion']
     res=pd.read_csv(tb/'resumen_series_lab1.csv');models=pd.read_csv(tb/'comparacion_modelos_lab1.csv')
     win=pd.read_csv(tb/'ganadores_lab1.csv')
     from visualizacion import SHORT,short_model
 
-    story.append(Paragraph('Decisiones de visualización del turismo en Guatemala',styles['TitleDV']))
-    md.append('# Decisiones de visualización del turismo en Guatemala\n')
-    p('Laboratorio 9 de Data Science · Universidad del Valle de Guatemala\nIhan Marroquin 23108 · Diego Patzan 23525\nCatedrático Ing. Erick Marroquin · Entrega prevista 18 de octubre de 2026')
+    hyperlink('Repositorio:',URL)
+    hyperlink('Infografia:',URL+'/blob/main/entrega/Infografia_turismo_Guatemala.png')
+    h('Explicación de las decisiones de diseño')
     p('La infografía comunica cómo cambió el ingreso mensual de viajeros entre enero de 2009 y junio de 2026 y qué límites tienen los modelos entrenados antes de la recuperación. La conclusión central es que el flujo se recuperó del desplome de 2020, pero el pronóstico del Lab 1 quedó persistentemente por debajo de lo observado. Por eso proponemos decisiones operativas apoyadas en la estacionalidad y una actualización del modelo antes de usarlo para presupuestos.')
     h('1 Audiencia y recorrido de lectura')
     p('Nos dirigimos a una persona del INGUAT que planifica campañas, personal y capacidad. Tiene pocos minutos para leer y no necesita conocer la formulación estadística. Usamos un titular informativo, cifras grandes, gráficos con unidades y recomendaciones vinculadas a evidencia. Los términos técnicos que no caben en el lienzo se definen en este documento.')
@@ -141,39 +215,31 @@ def main():
         ['Estacionalidad','Se excluye 2026 incompleto además de 2020-2021. Enero queda -4%, febrero -18% y marzo +5% al redondear.'],
         ['Eventos y fiestas','Se reemplazan afirmaciones causales por observaciones descriptivas y contexto.'],
         ['Respaldo aditivo','Se identifica expresamente como respaldo del Lab 1 y no como Prophet oficial.']],[132,373])
-    h('9 Formatos y archivos editables')
-    p('El PNG tiene 3507 × 4960 píxeles, superior al mínimo 1200 × 2400. El enunciado mezcla dos tamaños de impresión distintos: A3 mide 297 × 420 mm y 11 × 17 pulgadas mide 279.4 × 431.8 mm. Se entregan dos PDF separados de una página, uno por cada tamaño, manteniendo el mismo contenido. El documento de explicación se entrega en PDF y su fuente editable está en Markdown, dentro del repositorio con historial.')
+    h('9 Formatos del documento y la infografía')
+    p('El PNG tiene 3507 × 4960 píxeles, superior al mínimo 1200 × 2400. El enunciado mezcla dos tamaños de impresión distintos: A3 mide 297 × 420 mm y 11 × 17 pulgadas mide 279.4 × 431.8 mm. Se entregan dos PDF separados de una página, uno por cada tamaño, manteniendo el mismo contenido. El informe se entrega únicamente en PDF en la raíz del repositorio. La infografía completa ocupa una página independiente al final de este documento.')
     page()
 
     h('10 Reproducción y archivos de trabajo')
-    p('El procesamiento es local. src/analisis.py valida los meses y la coincidencia del Excel con los CSV, conserva las métricas y calcula el intervalo. src/visualizacion.py produce el lienzo y cinco figuras. src/documento.py genera este PDF y el Markdown editable. src/verificar_entrega.py comprueba dimensiones, páginas y coherencia numérica.')
-    p('Crear y activar un entorno con python -m venv .venv e instalar pip install -r requirements.txt. Ejecutar los cuatro scripts anteriores en ese orden con python src/nombre.py. El README contiene los comandos completos. results/tables/auditoria.json registra versiones y SHA-256 de los insumos. Solo se redondea al presentar resultados.')
-    h('Enlaces del trabajo',2)
-    for label,path in [('Repositorio y su historial',''),('Documento editable','/blob/main/docs/Explicacion_decisiones.md'),
-                       ('Infografía con historial','/blob/main/entrega/Infografia_turismo_Guatemala.png'),
-                       ('Código que construye el lienzo','/blob/main/src/visualizacion.py')]:
-        link=URL+path
-        story.append(Paragraph(f'<b>{html.escape(label)}</b><br/><link href="{link}" color="#124734">{link}</link>',styles['SmallDV']))
-        md.append(f'- [{label}]({link})\n')
-    h('Material de entrega',2)
-    table(['Archivo o enlace','Qué se entrega'],[
-        ['Explicacion_decisiones.pdf','Este documento con decisiones, fórmulas, limitaciones y enlaces.'],
-        ['Infografia_turismo_Guatemala.png','Lienzo estático de alta definición con los cinco bloques.'],
-        ['Infografia_turismo_Guatemala_A3.pdf','Una página exacta de 297 × 420 mm.'],
-        ['Infografia_turismo_Guatemala_11x17.pdf','Una página exacta de 11 × 17 pulgadas.'],
-        ['src y enlace del repositorio','Scripts, insumos, tablas y resultados versionados.']],[270,235])
-    def onpage(c:Canvas,doc):
-        c.saveState();c.setFont('DV',8);c.setFillColor(colors.black)
-        c.drawString(45,820,'Universidad del Valle de Guatemala · Data Science · Laboratorio 9')
-        c.drawString(45,25,'Ihan Marroquin 23108 · Diego Patzan 23525')
-        c.drawRightString(550,25,str(doc.page));c.restoreState()
-    out=ROOT/'entrega/Explicacion_decisiones.pdf'
-    doc=SimpleDocTemplate(str(out),pagesize=A4,leftMargin=45,rightMargin=45,topMargin=46,bottomMargin=45,
-                          title='Decisiones de visualización del turismo en Guatemala',author='Ihan Marroquin; Diego Patzan')
-    doc.build(story,onFirstPage=onpage,onLaterPages=onpage)
-    (ROOT/'docs').mkdir(exist_ok=True)
-    (ROOT/'docs/Explicacion_decisiones.md').write_text('\n'.join(md),encoding='utf-8')
+    p('El procesamiento es local. Los scripts de src generan tablas, gráficas, infografía e informe y verifican dimensiones, páginas y métricas. results/tables/auditoria.json registra versiones y SHA-256 de los insumos. Solo se redondea al presentar resultados.')
+    p('Para reproducir los resultados en Windows con Python 3.12, ejecutar los siguientes comandos desde la raíz del repositorio. La generación del informe PDF utiliza Microsoft Word en Windows o LibreOffice en otros sistemas.')
+    p('python -m venv .venv\n.venv\\Scripts\\Activate.ps1\npip install -r requirements.txt\npython src/analisis.py\npython src/visualizacion.py\npython src/documento.py\npython src/verificar_entrega.py')
+    doc.core_properties.title='Laboratorio 9 Visualización estática'
+    doc.core_properties.author='Ihan Marroquin; Diego Patzan'
+    doc.core_properties.subject='Explicación de las decisiones de diseño y reproducción del laboratorio'
+    work=ROOT/'tmp/documento';work.mkdir(parents=True,exist_ok=True)
+    intermediate=work/'Informe_Laboratorio9.docx'
+    doc.save(intermediate)
+    exportar_pdf(intermediate)
+    # La lámina A3 usa una página completa y conserva la nitidez de la infografía.
+    writer=PdfWriter()
+    writer.append(PdfReader(intermediate.with_suffix('.pdf')))
+    writer.append(PdfReader(ROOT/'entrega/Infografia_turismo_Guatemala_A3.pdf'))
+    writer.add_metadata({'/Title':'Laboratorio 9 Visualización estática',
+                         '/Author':'Ihan Marroquin; Diego Patzan'})
+    out=ROOT/'Informe_Laboratorio9.pdf'
+    with out.open('wb') as stream:writer.write(stream)
     print(out)
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    main()
